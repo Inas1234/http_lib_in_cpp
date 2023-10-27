@@ -4,6 +4,7 @@
 #include <string>
 #include <sstream>
 #include <winsock2.h>
+#include <fstream>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -103,59 +104,58 @@ public:
                 return;
             }
 
+            std::string fullRequest;
             char buffer[2048];
-            int bytesReceived = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
-            if (bytesReceived > 0) {
-                buffer[bytesReceived] = '\0';
-                std::cout << "Received:\n" << buffer << std::endl;
-
-                // Parse HTTP request here to determine method, route, etc.
-
-                std::string request(buffer);
-
-                std::string method;
-                std::string route;
-                std::string version;
-
-                std::stringstream ss(request);
-
-                ss >> method;
-                ss >> route;
-                ss >> version;
-
-                std::cout << "Method: " << method << std::endl;
-                std::cout << "Route: " << route << std::endl;
-                std::cout << "Version: " << version << std::endl;
-
-
-
-                std::string responseStr;
-
-                if (method == "GET") {
-                    auto iter = getHandlers.find(route);
-                    if (iter != getHandlers.end()) {
-                        Response response;
-                        iter->second(buffer, response);
-                        responseStr = response.str();
-                        send(clientSocket, responseStr.c_str(), responseStr.length(), 0);
-                    }
+            int bytesReceived;
+            do {
+                bytesReceived = recv(clientSocket, buffer, sizeof(buffer) - 1, 0);
+                if (bytesReceived > 0) {
+                    buffer[bytesReceived] = '\0';
+                    fullRequest += buffer;
                 }
-                else if (method == "POST") {
-                    auto iter = postHandlers.find(route);
-                    if (iter != postHandlers.end()) {
-                        Response response;
-                        iter->second(buffer, response);
-                        responseStr = response.str();
-                        send(clientSocket, responseStr.c_str(), responseStr.length(), 0);
-                    }
+            } while (bytesReceived == sizeof(buffer) - 1); 
+            std::cout << "Received:\n" << fullRequest << std::endl;
+            std::string request(fullRequest);
+            std::string method;
+            std::string route;
+            std::string version;
+            std::stringstream ss(request);
+            ss >> method;
+            ss >> route;
+            ss >> version;
+            std::cout << "Method: " << method << std::endl;
+            std::cout << "Route: " << route << std::endl;
+            std::cout << "Version: " << version << std::endl;
+            std::string responseStr;
+            if (method == "GET") {
+                auto iter = getHandlers.find(route);
+                if (iter != getHandlers.end()) {
+                    Response response;
+                    iter->second(buffer, response);
+                    responseStr = response.str();
+                    send(clientSocket, responseStr.c_str(), responseStr.length(), 0);
                 }
-                else {
-                    std::cout << "Invalid method: " << method << std::endl;
-                }
-
-
-                closesocket(clientSocket);
             }
+            else if (method == "POST") {
+                auto iter = postHandlers.find(route);
+                if (iter != postHandlers.end()) {
+                    Response response;
+                    iter->second(buffer, response);
+                    responseStr = response.str();
+                    send(clientSocket, responseStr.c_str(), responseStr.length(), 0);
+                }
+            }
+            else {
+                std::cout << "Invalid method: " << method << std::endl;
+            }
+            // Check for Connection: keep-alive header
+            // if (fullRequest.find("Connection: keep-alive") != std::string::npos) {
+            //     // If keep-alive, don't close the socket yet. Instead, go back to reading from this client.
+            //     continue;
+            // }
+
+            closesocket(clientSocket);
+            
         }
 
         closesocket(listenSocket);
@@ -170,15 +170,33 @@ private:
 
 int main() {
     HTTPServer server(8080);
+    #include <fstream>
+
+
+    server.get("/example", [&server](const std::string& request, Response& response) {
+        std::string buffer = "";
+        {
+            std::ifstream file("index.html");
+            if (file.is_open()) {
+                std::stringstream ss;
+                ss << file.rdbuf();
+                buffer = ss.str();
+                file.close();
+            }
+        }
+        response.setHeader("Content-Length", std::to_string(buffer.length()));
+        response.setHeader("Content-Type", "text/html");
+        response.append(buffer);
+        std::cout << "Handled GET request: " << request << std::endl;
+    });
 
     server.post("/example", [&server](const std::string& request, Response& response) {
         std::string data = server.extractDataFromBody(request);
-
-        response.append(data);
+        response.setHeader("Content-Type", "text/html");
+        response.setHeader("Connection", "close");
+        response.append("<h1>" +  data + "</h1>");
         std::cout << "Handled POST request: " << request << std::endl;
-
         std::cout << "Data: " << data << std::endl;
-
     });
 
     server.start();
